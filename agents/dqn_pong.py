@@ -22,10 +22,13 @@ def flatten_obs(obs):
     return flat_array.astype(jnp.float32) / 255.0  # Normalized for better gradient stability
 
 # ==========================================
-# 2. EVALUATION & VIDEO LOGGING FUNCTION
+# 2. EVALUATION & VIDEO LOGGING FUNCTION (SAFE VERSION)
 # ==========================================
 def evaluate_and_log_video(env, q_network, params, global_step, eval_seed=123):
-    """Runs a single episode without exploration and logs video to W&B."""
+    """
+    Runs a single episode without exploration and logs video to W&B.
+    Includes a safety limit of 5000 steps to prevent infinite bouncing loops.
+    """
     print(f"\n--- Running Evaluation at Step {global_step} ---")
     eval_key = jax.random.PRNGKey(eval_seed)
     obs, eval_state = env.reset(eval_key)
@@ -35,7 +38,11 @@ def evaluate_and_log_video(env, q_network, params, global_step, eval_seed=123):
     done = False
     eval_reward = 0.0
     
-    while not done:
+    # Safety limit to prevent the environment from hanging forever
+    max_eval_steps = 5000  
+    eval_step_count = 0
+    
+    while not done and eval_step_count < max_eval_steps:
         frame = env.render(eval_state)
         frames.append(np.array(frame))
         
@@ -46,19 +53,20 @@ def evaluate_and_log_video(env, q_network, params, global_step, eval_seed=123):
         flat_obs = flatten_obs(next_obs)
         eval_state = next_eval_state
         eval_reward += float(reward)
+        eval_step_count += 1
         
-    print(f"--- Evaluation Finished. Eval Reward: {eval_reward} ---\n")
+    print(f"--- Evaluation Finished in {eval_step_count} steps. Eval Reward: {eval_reward} ---\n")
     
-    # Reshape for W&B: (Time, Channels, Height, Width)
-    frames_np = np.array(frames) 
-    frames_wandb = np.transpose(frames_np, (0, 3, 1, 2)) 
-    
-    # Log metrics and gameplay video to Weights & Biases
-    wandb.log({
-        "eval/episodic_return": eval_reward,
-        "eval/gameplay_video": wandb.Video(frames_wandb, fps=30, format="gif"),
-        "global_step": global_step
-    })
+    # Only process and log to W&B if we actually have frames recorded
+    if len(frames) > 0:
+        frames_np = np.array(frames) 
+        frames_wandb = np.transpose(frames_np, (0, 3, 1, 2)) 
+        
+        wandb.log({
+            "eval/episodic_return": eval_reward,
+            "eval/gameplay_video": wandb.Video(frames_wandb, fps=30, format="gif"),
+            "global_step": global_step
+        })
 
 # ==========================================
 # 3. SIMPLE REPLAY BUFFER
